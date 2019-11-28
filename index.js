@@ -80,11 +80,15 @@ class Endpoint {
       this.remoteManifest = msg
     })
 
-    this.repo = opts.repo || new CommandRepo()
+    this.repo = opts.repo || new CommandRepo(opts.commands)
   }
 
-  command (cmd, cb) {
-    this.repo.add(cmd, cb)
+  command (name, oncall) {
+    this.repo.add(name, oncall)
+  }
+
+  commands (commands) {
+    this.repo.batch(commands)
   }
 
   announce (opts) {
