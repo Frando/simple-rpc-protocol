@@ -35,6 +35,21 @@ class Router extends EventEmitter {
     }
   }
 
+  command (name, oncall) {
+    this.repo.add(name, oncall)
+  }
+
+  commands (commands) {
+    this.repo.add(commands)
+  }
+
+  service (name, commands) {
+    for (let [cmd, opts] of Object.entries(commands)) {
+      const scopedName = `@${name} ${cmd}`
+      this.repo.add(scopedName, opts)
+    }
+  }
+
   onannounce (msg, endpoint) {
     const self = this
     const { name, commands } = msg
