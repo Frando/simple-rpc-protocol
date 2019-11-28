@@ -1,13 +1,14 @@
 {
   "name": "simple-rpc-protocol",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "",
   "main": "index.js",
   "scripts": {
     "test": "tape test.js"
   },
   "keywords": [],
-  "author": "",
+  "homepage": "https://github.com/Frando/simple-rpc-protocol",
+  "author": "Franz Heinzmann (Frando)",
   "license": "MIT",
   "dependencies": {
     "simple-message-channels": "^1.2.1",
@@ -15,7 +16,7 @@
     "varint": "^5.0.0"
   },
   "devDependencies": {
-    "tape": "^4.11.0",
-    "duplexify": "^4.1.1"
+    "duplexify": "^4.1.1",
+    "tape": "^4.11.0"
   }
 }

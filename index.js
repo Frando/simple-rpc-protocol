@@ -1,66 +1,84 @@
 const { EventEmitter } = require('events')
-const { randomBytes } = require('crypto')
-const { Duplex, Readable } = require('streamx')
+const { Duplex } = require('streamx')
 const varint = require('varint')
 const SMC = require('simple-message-channels')
 
-const { json, binary } = require('./util')
+const { json, binary, uuid } = require('./util')
 
 class Router extends EventEmitter {
-  constructor () {
+  constructor (opts = {}) {
     super()
+    this.opts = opts
     this.repo = new CommandRepo()
     this.remotes = {}
   }
 
   connection (stream, name) {
-    const protocol = new CommandProtocol({
-      send: (msg) => stream.write(msg),
-      oncall: (cmd, args, channel) => {
-        this.oncall(cmd, args, channel, protocol)
-      }
-    })
-    stream.on('data', data => protocol.recv(data))
-    protocol.on('announce', (msg) => {
-      this.onannounce(msg, protocol)
+    const endpoint = new Endpoint({
+      repo: this.repo,
+      stream,
+      name,
+      onannounce: msg => this.onannounce(msg, endpoint)
     })
   }
 
-  onannounce (msg, protocol) {
+  announce () {
+    // Announce to all connected remotes.
+    // TODO: This can loop for two connected routers.
+    // TODO: Rethink announce format (allow patch).
+    const manifest = {
+      name: this.opts.name,
+      commands: this.repo.manifest()
+    }
+    for (let remote of Object.values(this.remotes)) {
+      remote.endpoint.announce(manifest)
+    }
+  }
+
+  onannounce (msg, endpoint) {
+    const self = this
     const { name, commands } = msg
     this.remotes[name] = {
-      name, commands, protocol
+      name, commands, endpoint
     }
+
     this.emit('remote', name, this.remotes[name])
+
+    for (let [cmd, opts] of Object.entries(commands)) {
+      const scopedName = `@${name} ${cmd}`
+      this.repo.add(scopedName, {
+        ...opts,
+        oncall (args, channel) {
+          const remoteChannel = self.call(name, cmd, args)
+          pipe(channel.channel, remoteChannel)
+        }
+      })
+    }
+
+    this.announce()
   }
 
   call (name, cmd, args, cb) {
     if (!this.remotes[name]) return cb(new Error('Remote not found: ' + name))
-    this.remotes[name].call(cmd, args, cb)
-  }
-
-  oncall (cmd, args, channel, protocol) {
-    if (this.repo.has(cmd)) return this.repo.call(cmd, args, channel)
-
-    const { name, command } = parseScopedCommand(cmd)
-    const other = this.remotes[name]
-    if (!other) return channel.error(new Error('Command not found'))
-    const otherChannel = other.protocol.call(command, args)
-    const proxy = otherChannel.proxy
-    proxy.pipe(channel.proxy).pipe(proxy)
-    otherChannel.on('remote-error', msg => channel.error(msg))
-    otherChannel.on('reply', msg => channel.reply(msg))
+    return this.remotes[name].endpoint.call(cmd, args, cb)
   }
 }
 
 class Endpoint {
   constructor (opts) {
     this.stream = opts.stream
+    this.name = opts.name
+    this.opts = opts
     this.protocol = new CommandProtocol({
       send: this.stream.write.bind(this.stream),
-      oncall: this.oncall.bind(this)
+      oncall: this.oncall.bind(this),
+      onannounce: this.onannounce.bind(this)
     })
     this.stream.on('data', data => this.protocol.recv(data))
+
+    this.protocol.on('announce', msg => {
+      this.remoteManifest = msg
+    })
 
     this.repo = opts.repo || new CommandRepo()
   }
@@ -69,16 +87,25 @@ class Endpoint {
     this.repo.add(cmd, cb)
   }
 
-  announce (message) {
-    this.protocol.announce(message)
+  announce (opts) {
+    this.protocol.announce({
+      name: this.name,
+      commands: this.repo.manifest(),
+      ...opts
+    })
+  }
+
+  call (cmd, args, cb) {
+    return this.protocol.call(cmd, args, cb)
   }
 
   oncall (cmd, args, channel) {
     this.repo.oncall(cmd, args, channel)
   }
 
-  call (cmd, args, cb) {
-    this.protocol.call(cmd, args, cb)
+  onannounce (msg) {
+    this.remoteManifest = msg
+    if (this.opts.onannounce) this.opts.onannounce(msg)
   }
 }
 
@@ -95,8 +122,9 @@ class CommandProtocol extends EventEmitter {
         { context: this, onmessage: oncommand, encoding: json },
         { context: this, onmessage: onreply, encoding: json },
         { context: this, onmessage: ondata, encoding: binary },
-        { context: this, onmessage: onerror, encoding: json },
-        { context: this, onmessage: onfin, encoding: json }
+        { context: this, onmessage: onlog, encoding: json },
+        { context: this, onmessage: onfin, encoding: json },
+        { context: this, onmessage: onclose, encoding: json }
       ]
     })
 
@@ -112,8 +140,8 @@ class CommandProtocol extends EventEmitter {
   call (cmd, args, cb) {
     const channel = this.createLocalChannel()
     if (cb) {
-      channel.once('reply', msg => cb(null, msg, channel.proxy))
-      channel.once('remote-error', err => cb(err, null, channel.proxy))
+      channel.once('reply', msg => cb(null, msg, channel.io))
+      channel.once('remote-error', err => cb(err, null, channel.io))
     }
     channel.open()
     channel.command(cmd, args)
@@ -137,7 +165,7 @@ class CommandProtocol extends EventEmitter {
   }
 
   createLocalChannel () {
-    const id = randomBytes(16).toString('hex')
+    const id = uuid()
     const channel = this.createChannel(id)
     this.attachLocal(channel)
     return channel
@@ -171,6 +199,10 @@ function onopen (ch, message, self) {
   channel.onopen()
 }
 
+function onannounce (ch, message, self) {
+  if (ch === 0 && self.handlers.onannounce) self.handlers.onannounce(message, self)
+}
+
 function oncommand (ch, message, self) {
   if (self.remote[ch]) self.remote[ch].oncommand(message)
 }
@@ -183,16 +215,16 @@ function ondata (ch, message, self) {
   if (self.remote[ch]) self.remote[ch].ondata(message)
 }
 
-function onerror (ch, message, self) {
-  if (self.remote[ch]) self.remote[ch].onerror(message)
+function onlog (ch, message, self) {
+  if (self.remote[ch]) self.remote[ch].onlog(message)
 }
 
 function onfin (ch, message, self) {
   if (self.remote[ch]) self.remote[ch].onfin(message)
 }
 
-function onannounce (ch, message, self) {
-  if (ch === 0) self.emit('announce', message, self)
+function onclose (ch, message, self) {
+  if (self.remote[ch]) self.remote[ch].onclose(message)
 }
 
 function onmessage (ch, type, message, self) {
@@ -203,37 +235,61 @@ function onmessage (ch, type, message, self) {
 }
 
 class CommandRepo {
-  constructor () {
-    this.commands = {}
-    this.remoteCommands = {}
+  constructor (commands) {
+    this.commands = commands || {}
   }
 
-  add (command, opts) {
+  batch (commands) {
+    Object.entries(commands).forEach((name, opts) => this.add(name, opts))
+  }
+
+  add (name, opts) {
     if (typeof opts === 'function') opts = { oncall: opts }
-    opts.command = command
-    this.commands[command] = opts
+    opts.name = name
+    this.commands[name] = opts
   }
 
-  has (command) {
-    return !!this.commands[command]
+  has (name) {
+    return !!this.commands[name]
   }
 
   oncall (cmd, args, channel) {
     if (!this.commands[cmd]) return this.error('Command not found: ' + cmd)
-    this.commands[cmd].oncall(args, channel.proxy)
+    this.commands[cmd].oncall(args, channel.io)
   }
 
   error (err, contxt) {
     console.error(err)
   }
+
+  manifest () {
+    let manifest = {}
+    for (let [name, opts] of Object.entries(this.commands)) {
+      manifest[name] = {
+        mode: opts.mode,
+        help: opts.help,
+        args: opts.args
+      }
+    }
+    return manifest
+  }
 }
 
-class ChannelProxy extends Duplex {
+class DataChannel extends Duplex {
   constructor (channel) {
     super()
     this.channel = channel
     this.on('finish', () => channel.fin())
+    this.once('error', err => this.error(err))
     channel.on('reply', msg => this.emit('reply', msg))
+  }
+
+  get id () {
+    return this.channel.id
+  }
+
+  get log () {
+    return this.channel.log
   }
 
   reply (msg) {
@@ -241,7 +297,7 @@ class ChannelProxy extends Duplex {
   }
 
   error (err) {
-    this.channel.error(err)
+    this.channel.close(err)
   }
 
   _write (data, cb) {
@@ -260,7 +316,8 @@ class CommandChannel extends EventEmitter {
     this.id = id
     // should be { oncall, send }
     this.handlers = handlers
-    this.proxy = new ChannelProxy(this)
+    this.io = new DataChannel(this)
+    this.log = new Duplex()
   }
 
   open () {
@@ -286,16 +343,16 @@ class CommandChannel extends EventEmitter {
     this._send(4, msg)
   }
 
-  error (msg) {
-    if (msg instanceof Error) msg = msg.toString()
-    if (typeof msg === 'object' && msg.toString) msg = msg.toString()
+  log (msg) {
+    if (msg instanceof Error) msg = { error: msg.toString() }
     this._send(5, msg)
   }
 
   fin () {
     const msg = {}
     this._send(6, msg)
-    this.destroy()
+    this._localClosed = true
+    if (this._remoteClosed) this.destroy()
   }
 
   _send (type, msg) {
@@ -321,37 +378,44 @@ class CommandChannel extends EventEmitter {
 
   ondata (msg) {
     if (!this._commandSent) this.destroy('Cannot receive data before sending a command')
-    this.proxy.push(msg)
+    this.io.push(msg)
   }
 
-  onerror (msg) {
-    this.emit('remote-error', msg)
-  }
-
-  createLogStream () {
-    const stream = new Readable({ read () {} })
-    this.on('remote-error', msg => stream.push(msg))
-    return stream
+  onlog (msg) {
+    this.log.push(msg)
   }
 
   onfin () {
-    this.proxy.push(null)
+    this.io.push(null)
+    this._remoteClosed = true
     this.emit('remote-close')
-    this.destroy()
+    if (this._localClosed) this.destroy()
+  }
+
+  onclose (error) {
+    if (error) this.remoteError = error
+    this.destroy(error)
   }
 
   destroy (err) {
     this.closed = true
-    if (err) this.emit('error', err)
+    this.io.destroy()
+    this.log.destroy()
+    if (typeof err === 'string') err = new Error(err)
+    if (err && this.remoteError) this.emit('remote-error', err)
+    else if (err) this.emit('error', err)
+    this.emit('close', err)
   }
 }
 
-module.exports = { CommandChannel, CommandRepo, CommandProtocol, Router, Endpoint }
-
-function parseScopedCommand (cmd) {
-  if (!cmd.startsWith('@')) return false
-  let [name, ...other] = cmd.trim().substring(1).split(/ (.+)/)
-  const command = other.join(' ').trim()
-  if (!command.length) return false
-  return { name, command }
+function pipe (a, b) {
+  a.io.pipe(b.io).pipe(a.io)
+  a.log.pipe(b.log).pipe(a.log)
+  a.once('close', err => b.close(err))
+  b.once('close', err => a.close(err))
+  a.on('reply', msg => b.reply(msg))
+  b.on('reply', msg => a.reply(msg))
+  // b.on('remote-error', err => b.emit('remote-error', err))
 }
+
+module.exports = { CommandChannel, CommandRepo, CommandProtocol, Endpoint, Router }

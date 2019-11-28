@@ -1,6 +1,8 @@
+const { randomBytes } = require('crypto')
+
 const PAYLOAD = Symbol('payload')
 
-const binary = {
+exports.binary = {
   decode (msg) { return msg },
   encode (msg, buf, offset) {
     msg.copy(buf, offset)
@@ -8,7 +10,7 @@ const binary = {
   encodingLength (msg) { return msg.length }
 }
 
-const json = {
+exports.json = {
   decode (message) {
     return JSON.parse(message.toString())
   },
@@ -29,4 +31,6 @@ const json = {
   }
 }
 
-module.exports = { json, binary }
+exports.uuid = function () {
+  return randomBytes(16).toString('hex')
+}

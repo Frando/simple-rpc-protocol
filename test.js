@@ -36,8 +36,9 @@ tape('basics', t => {
 tape('router', t => {
   const server = new Router()
   const [c1a, c1b] = duplexPair()
-  const client1 = new Endpoint({ stream: c1a })
   const [c2a, c2b] = duplexPair()
+
+  const client1 = new Endpoint({ stream: c1a })
   const client2 = new Endpoint({ stream: c2a })
 
   server.connection(c1b)
