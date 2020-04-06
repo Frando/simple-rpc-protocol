@@ -1,4 +1,4 @@
-const { randomBytes } = require('crypto')
+const randomBytes = require('randombytes')
 
 const PAYLOAD = Symbol('payload')
 

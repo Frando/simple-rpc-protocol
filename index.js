@@ -2,6 +2,7 @@ const { EventEmitter } = require('events')
 const { Duplex } = require('streamx')
 const varint = require('varint')
 const SMC = require('simple-message-channels')
+const debug = require('debug')('rpc')
 
 const { json, binary, uuid } = require('./util')
 
@@ -11,6 +12,7 @@ class Router extends EventEmitter {
     this.opts = opts
     this.repo = new CommandRepo()
     this.remotes = {}
+    this.endpoints = []
   }
 
   connection (stream, name) {
@@ -20,6 +22,7 @@ class Router extends EventEmitter {
       name,
       onannounce: msg => this.onannounce(msg, endpoint)
     })
+    this.endpoints.push(endpoint)
   }
 
   announce () {
@@ -53,6 +56,7 @@ class Router extends EventEmitter {
   onannounce (msg, endpoint) {
     const self = this
     const { name, commands } = msg
+    debug('received announce from %s (%s commands)', name, Object.keys(commands).length)
     this.remotes[name] = {
       name, commands, endpoint
     }
@@ -384,7 +388,7 @@ class CommandChannel extends EventEmitter {
   }
 
   oncommand (msg) {
-    if (this._commandReceived) return this.destroy('Cannot receive more than on command per channel')
+    if (this._commandReceived) return this.destroy('Cannot receive more than one command per channel')
     this._commandReceived = true
     const { cmd, args } = msg
     this.handlers.oncall(cmd, args, this)

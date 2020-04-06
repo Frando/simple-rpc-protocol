@@ -1,6 +1,6 @@
 {
   "name": "simple-rpc-protocol",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -11,6 +11,7 @@
   "author": "Franz Heinzmann (Frando)",
   "license": "MIT",
   "dependencies": {
+    "randombytes": "^2.1.0",
     "simple-message-channels": "^1.2.1",
     "streamx": "^2.5.0",
     "varint": "^5.0.0"
