@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "duplexify": "^4.1.1",
+    "pump": "^3.0.0",
     "tape": "^4.11.0"
   }
 }
