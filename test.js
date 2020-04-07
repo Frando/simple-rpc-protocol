@@ -1,12 +1,13 @@
 const tape = require('tape')
 const { Readable, Writable, Transform } = require('streamx')
 const duplexify = require('duplexify')
-const pump = require('pump')
+// const pump = require('pump')
+const collect = require('stream-collector')
 
 const { Router, Endpoint } = require('.')
 
 class PassThrough extends Transform {
-  transform (chunk, _enc, next) {
+  transform (chunk, enc, next) {
     this.push(chunk)
     next()
   }
@@ -80,7 +81,7 @@ tape('service and env', t => {
       }
     },
     opts: {
-      onopen (env, _channel, cb) {
+      onopen (env, channel, cb) {
         if (!env.emphasis) return cb(new Error('Cannot shout without emphasis'))
         cb()
       }
@@ -104,7 +105,7 @@ tape('service and env', t => {
 tape('pipe end', t => {
   t.plan(3)
   const [client, server] = create()
-  server.command('end', (_args, channel) => {
+  server.command('end', (args, channel) => {
     channel.reply()
     channel.setEncoding('json')
     const rs = new Readable({ read () {} })
@@ -131,7 +132,7 @@ tape('pipe end', t => {
 tape('pipe error', t => {
   t.plan(4)
   const [client, server] = create()
-  server.command('end', (_args, channel) => {
+  server.command('end', (args, channel) => {
     channel.reply()
     channel.setEncoding('json')
     const rs = new Readable({ read (next) { next() } })
@@ -145,7 +146,7 @@ tape('pipe error', t => {
   })
   server.announce()
 
-  client.call('end', (err, _msg, channel) => {
+  client.call('end', (err, msg, channel) => {
     t.error(err, 'reply ok')
     channel.setEncoding('json')
     const ws = new Writable({
@@ -164,10 +165,10 @@ tape('pipe error', t => {
 tape('error handling', t => {
   t.plan(3)
   const [client, server] = create()
-  server.command('failing', (_args, channel) => {
+  server.command('failing', (args, channel) => {
     channel.error(new Error('No!'))
   })
-  server.command('failing-stream', (_args, channel) => {
+  server.command('failing-stream', (args, channel) => {
     channel.reply()
     channel.error(new Error('Nono!'))
   })
@@ -184,6 +185,30 @@ tape('error handling', t => {
   })
 })
 
+tape.only('cli', t => {
+  const { spawn } = require('child_process')
+  const [server, client] = create()
+  server.command('echo', (args, channel) => {
+    channel.reply()
+    const nodeArgs = ['-e', 'console.log("hi " + process.env.FOO)']
+    const proc = spawn('node', nodeArgs, {
+      env: channel.env
+    })
+    proc.stdout.pipe(channel)
+  })
+  server.announce()
+  const env = { FOO: 'bar' }
+  client.call('echo', [], env, (err, msg, channel) => {
+    channel.setEncoding('utf8')
+    t.error(err)
+    collect(channel, (err, res) => {
+      t.error(err)
+      t.equal(res.join(), 'hi bar\n')
+      t.end()
+    })
+  })
+})
+
 function duplexPair () {
   const s1read = new PassThrough()
   const s1write = new PassThrough()
@@ -196,18 +221,17 @@ function duplexPair () {
   return [s1, s2]
 }
 
-
-function watch (emitter, name) {
-  const emit = emitter.emit.bind(emitter)
-  emitter.emit = function (ev, ...args) {
-    if (ev === 'pipe') {
-      console.log('stream [%s] %s', name, ev)
-    } else {
-      console.log('stream [%s] %s %o', name, ev, args)
-    }
-    emit(ev, ...args)
-  }
-}
+// function watch (emitter, name) {
+//   const emit = emitter.emit.bind(emitter)
+//   emitter.emit = function (ev, ...args) {
+//     if (ev === 'pipe') {
+//       console.log('stream [%s] %s', name, ev)
+//     } else {
+//       console.log('stream [%s] %s %o', name, ev, args)
+//     }
+//     emit(ev, ...args)
+//   }
+// }
 
 function create () {
   const [s1, s2] = duplexPair()
@@ -215,4 +239,3 @@ function create () {
   const client = new Endpoint({ stream: s2, name: 'client' })
   return [client, server]
 }
-
