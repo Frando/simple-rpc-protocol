@@ -60,6 +60,42 @@ tape('router', t => {
   }, 10)
 })
 
+tape('service and env', t => {
+  t.plan(4)
+  const [s1, s2] = duplexPair()
+  const server = new Endpoint({ stream: s1, name: 'server' })
+  const client = new Endpoint({ stream: s2, name: 'client' })
+
+  const service = {
+    name: 'echos',
+    commands: {
+      loud (args, channel) {
+        channel.reply(args[0] + channel.env.emphasis)
+      },
+      louder (args, channel) {
+        channel.reply(args[0].toUpperCase() + channel.env.emphasis)
+      }
+    },
+    opts: {
+      onopen (env, _channel, cb) {
+        if (!env.emphasis) return cb(new Error('Cannot shout without emphasis'))
+        cb()
+      }
+    }
+  }
+  server.service(service.name, service.commands, service.opts)
+  const env = { emphasis: '!!' }
+  const args = ['hi']
+  client.call('@echos loud', args, env, (err, msg) => {
+    t.error(err)
+    t.equal(msg, 'hi!!')
+  })
+  client.call('@echos louder', args, env, (err, msg) => {
+    t.error(err)
+    t.equal(msg, 'HI!!')
+  })
+})
+
 function duplexPair () {
   const s1read = new PassThrough()
   const s1write = new PassThrough()

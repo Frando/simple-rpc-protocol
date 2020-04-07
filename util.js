@@ -20,10 +20,11 @@ exports.json = {
   },
   encode (message, buf, offset) {
     const encoded = this._encode(message)
+    if (!buf) return encoded
     encoded.copy(buf, offset)
   },
   _encode (message) {
-    if (typeof message === 'object') {
+    if (message && typeof message === 'object') {
       if (!message[PAYLOAD]) message[PAYLOAD] = Buffer.from(JSON.stringify(message))
       return message[PAYLOAD]
     }

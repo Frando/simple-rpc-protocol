@@ -11,6 +11,7 @@
   "author": "Franz Heinzmann (Frando)",
   "license": "MIT",
   "dependencies": {
+    "codecs": "^2.0.0",
     "debug": "^4.1.1",
     "randombytes": "^2.1.0",
     "simple-message-channels": "^1.2.1",
