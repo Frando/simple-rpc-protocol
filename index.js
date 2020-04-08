@@ -2,7 +2,7 @@ const { EventEmitter } = require('events')
 const { Duplex } = require('streamx')
 const varint = require('varint')
 const SMC = require('simple-message-channels')
-// const debug = require('debug')('rpc')
+const debug = require('debug')('rpc')
 const codecs = require('codecs')
 
 const { json, uuid } = require('./util')
@@ -81,7 +81,7 @@ class Router extends EventEmitter {
   onannounce (msg, endpoint) {
     const self = this
     const { name, commands } = msg
-    // debug('received announce from %s (%s commands)', name, Object.keys(commands).length)
+    debug('received announce from %s (%s commands)', name, Object.keys(commands).length)
     this.remotes[name] = {
       name, commands, endpoint
     }
@@ -109,6 +109,14 @@ class Router extends EventEmitter {
     if (!this.remotes[name]) return cb(new Error('Remote not found: ' + name))
     this.remotes[name].endpoint.call(cmd, args, env, cb)
   }
+
+  close () {
+    for (const endpoint of this.endpoints) {
+      endpoint.close()
+    }
+    this.endpoints = []
+    this.remotes = {}
+  }
 }
 
 class Endpoint extends EventEmitter {
@@ -125,19 +133,31 @@ class Endpoint extends EventEmitter {
     this.protocol = new CommandProtocol({
       name: this.name,
       send (buf) {
+        if (self._closed) return
         self.stream.write(buf)
       },
       oncall (cmd, args, channel) {
+        if (self._closed) return
         self.repo.oncall(cmd, args, channel.io)
       },
       onannounce (manifest) {
+        if (self._closed) return
         self.remoteManifest = manifest
         self.emit('remote-manifest', manifest)
       }
     })
 
+    this.stream.on('close', () => this.close())
+
     // This pipes the transport stream into the protocol.
     this.stream.on('data', data => this.protocol.recv(data))
+  }
+
+  close () {
+    this._closed = true
+    this.emit('close')
+    this.stream.destroy()
+    this.protocol.destroy()
   }
 
   command (name, oncall) {
@@ -237,6 +257,12 @@ class CommandProtocol extends EventEmitter {
     this.channels = {}
   }
 
+  destroy () {
+    for (const channel of Object.values(this.channels)) {
+      channel.destroy()
+    }
+  }
+
   onmessage (ch, typ, message) {
     const self = this
 
@@ -269,7 +295,6 @@ class CommandProtocol extends EventEmitter {
   }
 
   announce (message) {
-    // debug('announce', message)
     message = json.encode(message)
     this.send(0, Typ.Announce, message)
   }
@@ -543,8 +568,8 @@ class DataChannel extends Duplex {
 function pipe (a, b) {
   a.pipe(b).pipe(a)
   a.log.pipe(b.log).pipe(a.log)
-  a.once('close', err => b.close(err))
-  b.once('close', err => a.close(err))
+  a.once('close', err => b.destroy(err))
+  b.once('close', err => a.destroy(err))
   a.on('error', err => b.error(err))
   b.on('error', err => a.error(err))
   // a.on('reply', msg => b.reply(msg))
