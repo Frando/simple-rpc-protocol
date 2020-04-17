@@ -480,7 +480,8 @@ class CommandChannel extends EventEmitter {
   }
 
   onclose (message) {
-    const { error } = message
+    let error
+    if (message && message.error) error = message.error
     this.emit('remote-close')
     this._remoteClosed = true
     if (error) {
