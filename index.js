@@ -93,7 +93,7 @@ class Router extends EventEmitter {
       this.repo.add(scopedName, {
         ...opts,
         oncall (args, channel) {
-          self.call(name, cmd, args, (err, args, remoteChannel) => {
+          self.call(name, cmd, args, channel.env, (err, args, remoteChannel) => {
             if (err) return channel.error(err)
             channel.reply(args)
             pipe(channel, remoteChannel)
@@ -241,9 +241,10 @@ class Endpoint extends EventEmitter {
 
 class CommandProtocol extends EventEmitter {
   static id () {
-    if (!CommandProtocol.id) CommandProtocol.id = 0
-    return ++CommandProtocol.id
+    if (!CommandProtocol._id) CommandProtocol._id = 0
+    return ++CommandProtocol._id
   }
+
   constructor (handlers) {
     super()
     this._name = handlers.name || ('proto-' + CommandProtocol.id())
@@ -267,14 +268,15 @@ class CommandProtocol extends EventEmitter {
     const self = this
 
     switch (typ) {
-      case Typ.Announce:
+      case Typ.Announce: {
         message = json.decode(message)
         // debug('[%s ch%s] recv Announce %o', self._name, ch, message)
         if (ch === 0 && self.handlers.onannounce) self.handlers.onannounce(message, self)
         self.remoteManifest = message
         return
+      }
 
-      case Typ.Open:
+      case Typ.Open: {
         message = json.decode(message)
         // debug('[%s ch%s] recv Open %o', self._name, ch, message)
         const { id } = message
@@ -282,12 +284,14 @@ class CommandProtocol extends EventEmitter {
         self.attachRemote(channel, ch)
         channel.onopen(message)
         return
+      }
 
-      case Typ.Extension:
+      case Typ.Extension: {
         const extid = varint.decode(message)
         const m = message.slice(varint.decode.bytes)
         if (self.handlers.onextension) self.handlers.onextension(ch, extid, m)
         return
+      }
     }
 
     if (!self.remote[ch]) return
@@ -347,11 +351,12 @@ class CommandChannel extends EventEmitter {
   constructor (id, handlers, opts = {}) {
     super()
     this.id = id
+    const self = this
     // should be { oncall, send }
     this.handlers = handlers
     this._name = this.handlers.name
     this.io = new DataChannel(this)
-    this.log = new Duplex()
+    this.logs = new LogChannel(this)
 
     this.channelEncoding = codecs(opts.encoding || 'binary')
     this.mode = opts.mode || 'any'
@@ -439,7 +444,7 @@ class CommandChannel extends EventEmitter {
     } else {
       message = Buffer.alloc(0)
     }
-    let id = this.localId
+    const id = this.localId
     this.handlers.send(id, typ, message)
   }
 
@@ -469,11 +474,12 @@ class CommandChannel extends EventEmitter {
   }
 
   onlog (msg) {
-    this.log.push(msg)
+    this.logs.push(msg)
   }
 
   onfin () {
     this.io.push(null)
+    this.logs.push(null)
     this._remoteClosed = true
     this.emit('remote-close')
     if (this._localClosed) this.destroy()
@@ -507,11 +513,25 @@ class CommandChannel extends EventEmitter {
       this.io.destroy()
     }
 
-    this.log.destroy()
+    this.logs.destroy()
 
     this.emit('close', err)
-    // this.io.destroy()
-    // this.log.destroy()
+  }
+}
+
+class LogChannel extends Duplex {
+  constructor (channel) {
+    super()
+    this.channel = channel
+  }
+
+  _write (message, next) {
+    this.channel.log(message)
+    next()
+  }
+
+  _read (next) {
+    next()
   }
 }
 
@@ -538,8 +558,12 @@ class DataChannel extends Duplex {
     return this.channel.id
   }
 
-  get log () {
-    return this.channel.log
+  get logs () {
+    return this.channel.logs
+  }
+
+  log (...args) {
+    this.channel.logs.write(args)
   }
 
   setEncoding (encoding) {
@@ -568,7 +592,7 @@ class DataChannel extends Duplex {
 
 function pipe (a, b) {
   a.pipe(b).pipe(a)
-  a.log.pipe(b.log).pipe(a.log)
+  a.logs.pipe(b.logs).pipe(a.logs)
   a.once('close', err => b.destroy(err))
   b.once('close', err => a.destroy(err))
   a.on('error', err => b.error(err))

@@ -39,6 +39,27 @@ tape('basics', t => {
   })
 })
 
+tape('logging', t => {
+  const [server, client] = create()
+  server.command('echo', (args, channel) => {
+    t.equal(args, 'hello world', 'server args recv')
+    channel.log('hello')
+    channel.reply(args.toUpperCase())
+    channel.log('done')
+    channel.end()
+  })
+  server.announce()
+
+  client.call('echo', 'hello world', (err, msg, channel) => {
+    t.error(err, 'no err')
+    t.equal(msg, 'HELLO WORLD', 'client uppercase res')
+    collect(channel.logs, (err, logs) => {
+      t.error(err)
+      t.deepEqual(logs, [['hello'], ['done']])
+      t.end()
+    })
+  })
+})
 tape('router', t => {
   const server = new Router()
   const [c1a, c1b] = duplexPair()
@@ -185,7 +206,7 @@ tape('error handling', t => {
   })
 })
 
-tape.only('cli', t => {
+tape('cli', t => {
   const { spawn } = require('child_process')
   const [server, client] = create()
   server.command('echo', (args, channel) => {
