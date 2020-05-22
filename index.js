@@ -128,7 +128,7 @@ class Router extends EventEmitter {
 }
 
 class Endpoint extends EventEmitter {
-  constructor (opts) {
+  constructor (opts = {}) {
     super()
     const self = this
 
