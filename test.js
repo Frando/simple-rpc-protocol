@@ -13,28 +13,46 @@ class PassThrough extends Transform {
   }
 }
 
-tape('basics', t => {
+tape('basics: async', async t => {
   const [server, client] = create()
-  server.command('echo', (args, channel) => {
-    t.equal(args, 'hello world', 'server args recv')
-    channel.reply(args.toUpperCase())
-    const rs = new Readable({
-      read (cb) { cb() }
-    })
-    rs.pipe(channel)
-    rs.push(Buffer.from('hi'))
-    rs.push(null)
+  server.command('echo', {
+    mode: 'async',
+    oncall (args, channel) {
+      t.equal(args, 'hello world', 'server args recv')
+      channel.reply(args.toUpperCase())
+    }
   })
   server.announce()
+  const [result] = await client.call('echo', 'hello world')
+  t.equal(result, 'HELLO WORLD', 'echo reply ok')
+})
 
-  client.call('echo', 'hello world', (err, msg, channel) => {
-    t.error(err, 'no err')
-    t.equal(msg, 'HELLO WORLD', 'client uppercase res')
-    channel.on('data', d => {
-      t.equal(d.toString(), 'hi', 'client channel recv')
-    })
-    channel.on('end', () => {
+tape('basics: streaming ', async t => {
+  const [server, client] = create()
+  server.command('echostream', {
+    mode: 'streaming',
+    encoding: 'utf8',
+    oncall (args, channel) {
+      const [suffix] = args
+      channel.on('data', data => {
+        channel.write(data + suffix)
+      })
+    }
+  })
+
+  server.announce()
+  await client.ready()
+
+  await new Promise(resolve => {
+    const stream = client.callStream('echostream', ['foo'])
+    stream.write('hello')
+    stream.on('error', err => {
+      t.fail(err)
       t.end()
+    })
+    stream.once('data', data => {
+      t.equal(data, 'hellofoo', 'stream reply ok')
+      resolve()
     })
   })
 })
@@ -44,8 +62,8 @@ tape('logging', t => {
   server.command('echo', (args, channel) => {
     t.equal(args, 'hello world', 'server args recv')
     channel.log('hello')
-    channel.reply(args.toUpperCase())
     channel.log('done')
+    channel.reply(args.toUpperCase())
     channel.end()
   })
   server.announce()
@@ -55,7 +73,7 @@ tape('logging', t => {
     t.equal(msg, 'HELLO WORLD', 'client uppercase res')
     collect(channel.logs, (err, logs) => {
       t.error(err)
-      t.deepEqual(logs, [['hello'], ['done']])
+      t.deepEqual(logs, ['hello', 'done'])
       t.end()
     })
   })
@@ -209,26 +227,51 @@ tape('error handling', t => {
 tape('cli', t => {
   const { spawn } = require('child_process')
   const [server, client] = create()
-  server.command('echo', (args, channel) => {
-    channel.reply()
-    const nodeArgs = ['-e', 'console.log("hi " + process.env.FOO)']
-    const proc = spawn('node', nodeArgs, {
-      env: channel.env
-    })
-    proc.stdout.pipe(channel)
+  server.command('echo', {
+    encoding: 'utf8',
+    logEncoding: 'utf8',
+    mode: 'streaming',
+    oncall (args, channel) {
+      const nodeArgs = ['-e', `
+        console.error("start")
+        console.log("hi " + process.env.FOO)
+        console.error("end")
+      `]
+      const proc = spawn('node', nodeArgs, {
+        env: channel.env
+      })
+      proc.stdout.pipe(channel)
+      proc.stderr.pipe(channel.logs)
+    }
   })
   server.announce()
   const env = { FOO: 'bar' }
-  client.call('echo', [], env, (err, msg, channel) => {
-    channel.setEncoding('utf8')
-    t.error(err)
+  client.ready(() => {
+    const channel = client.callStream('echo', [], env)
+    // console.log('channel', channel)
+    channel.on('error', err => {
+      t.fail(err)
+    })
+    let pending = 2
     collect(channel, (err, res) => {
       t.error(err)
-      t.equal(res.join(), 'hi bar\n')
-      t.end()
+      t.equal(res.join(''), 'hi bar\n')
+      if (--pending === 0) t.end()
+    })
+    collect(channel.logs, (err, res) => {
+      t.error(err)
+      t.equal(res.join(''), 'start\nend\n')
+      if (--pending === 0) t.end()
     })
   })
 })
+
+function create () {
+  const [s1, s2] = duplexPair()
+  const server = new Endpoint({ stream: s1, name: 'server' })
+  const client = new Endpoint({ stream: s2, name: 'client' })
+  return [server, client]
+}
 
 function duplexPair () {
   const s1read = new PassThrough()
@@ -253,10 +296,3 @@ function duplexPair () {
 //     emit(ev, ...args)
 //   }
 // }
-
-function create () {
-  const [s1, s2] = duplexPair()
-  const server = new Endpoint({ stream: s1, name: 'server' })
-  const client = new Endpoint({ stream: s2, name: 'client' })
-  return [client, server]
-}
