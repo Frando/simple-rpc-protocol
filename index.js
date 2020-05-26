@@ -3,6 +3,7 @@ const { Duplex } = require('streamx')
 const varint = require('varint')
 const SMC = require('simple-message-channels')
 const debug = require('debug')('rpc')
+const pump = require('pump')
 const codecs = require('codecs')
 
 const { json, uuid } = require('./util')
@@ -127,12 +128,11 @@ class Router extends EventEmitter {
   }
 }
 
-class Endpoint extends EventEmitter {
+class Endpoint extends Duplex {
   constructor (opts = {}) {
     super()
     const self = this
 
-    this.stream = opts.stream
     this.name = opts.name
     this.repo = opts.repo || new CommandRepo(opts.commands)
     this.opts = opts
@@ -143,7 +143,7 @@ class Endpoint extends EventEmitter {
       name: this.name,
       send (buf) {
         if (self._closed) return
-        self.stream.write(buf)
+        self.push(buf)
       },
       oncall (cmd, args, channel) {
         if (self._closed) return
@@ -156,17 +156,28 @@ class Endpoint extends EventEmitter {
       }
     })
 
-    this.stream.on('close', () => this.close())
+    if (opts.stream) {
+      pump(opts.stream, this, opts.stream)
+    }
+  }
 
-    // This pipes the transport stream into the protocol.
-    this.stream.on('data', data => this.protocol.recv(data))
+  _write (data, cb) {
+    this.protocol.recv(data)
+    cb()
+  }
+
+  _read (cb) {
+    cb()
+  }
+
+  _predestroy () {
+    this._closed = true
+    this.emit('close')
+    this.protocol.destroy()
   }
 
   close () {
-    this._closed = true
-    this.emit('close')
-    this.stream.destroy()
-    this.protocol.destroy()
+    this.destroy()
   }
 
   command (name, ...args) {
