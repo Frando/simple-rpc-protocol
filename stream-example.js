@@ -1,6 +1,7 @@
 const net = require('net')
 const { Transform } = require('stream')
 const { Endpoint } = require('.')
+const pump = require('pump')
 
 const PORT = 22022
 
@@ -16,7 +17,8 @@ if (command === 'listen') {
   // Connect to a TCP server.
   const socket = net.connect(PORT)
   // Init an RPC endpoint on the stream.
-  const endpoint = new Endpoint({ stream: socket })
+  const endpoint = new Endpoint()
+  pump(socket, endpoint, socket)
   // Wait until the remote end sent us their command list
   endpoint.once('remote-manifest', () => {
     // Call a command, in streaming mode.
@@ -28,7 +30,8 @@ if (command === 'listen') {
 }
 
 function onconnection (socket) {
-  const endpoint = new Endpoint({ stream: socket })
+  const endpoint = new Endpoint()
+  pump(socket, endpoint, socket)
   // Expose a command
   endpoint.command('shoutstream', {
     // Modes are 'streaming' and 'async'

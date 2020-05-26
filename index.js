@@ -114,11 +114,6 @@ class Router extends EventEmitter {
     this.announce()
   }
 
-  // call (name, cmd, args, env, cb) {
-  //   if (!this.remotes[name]) return cb(new Error('Remote not found: ' + name))
-  //   this.remotes[name].endpoint.call(cmd, args, env, cb)
-  // }
-
   close () {
     for (const endpoint of this.endpoints) {
       endpoint.close()
